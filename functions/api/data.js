@@ -30,6 +30,19 @@ export async function onRequest(context) {
 
   if (request.method === "POST") {
     const body = await request.text();
+
+    // Handle settings first (before array validation)
+    if (key === "settings") {
+      try {
+        const settingsObj = JSON.parse(body);
+        await env.INTERCEDE_KV.put(key, JSON.stringify(settingsObj));
+        return new Response(JSON.stringify({ ok: true }), { headers });
+      } catch (_e) {
+        return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400, headers });
+      }
+    }
+
+    // For people/roster data, validate as array
     let incoming, force;
     try {
       const parsed = JSON.parse(body);
@@ -44,13 +57,6 @@ export async function onRequest(context) {
       if (!Array.isArray(incoming)) throw new Error("not array");
     } catch (_e) {
       return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400, headers });
-    }
-
-    // For settings key, just save the object directly
-    if (key === "settings") {
-      const settingsObj = JSON.parse(body);
-      await env.INTERCEDE_KV.put(key, JSON.stringify(settingsObj));
-      return new Response(JSON.stringify({ ok: true }), { headers });
     }
 
     // Refuse to store empty — safety net
