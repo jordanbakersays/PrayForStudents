@@ -15,8 +15,16 @@ export async function onRequest(context) {
     return new Response(JSON.stringify({ error: "KV namespace not bound" }), { status: 500, headers });
   }
 
+  // Get the key from query params (defaults to "people" for roster data)
+  const url = new URL(request.url);
+  const key = url.searchParams.get("key") || "people";
+
   if (request.method === "GET") {
-    const data = await env.INTERCEDE_KV.get("people");
+    const data = await env.INTERCEDE_KV.get(key);
+    // For settings, return as JSON object. For people, return as array.
+    if (key === "settings") {
+      return new Response(data || "null", { headers });
+    }
     return new Response(data || "[]", { headers });
   }
 
@@ -38,6 +46,13 @@ export async function onRequest(context) {
       return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400, headers });
     }
 
+    // For settings key, just save the object directly
+    if (key === "settings") {
+      const settingsObj = JSON.parse(body);
+      await env.INTERCEDE_KV.put(key, JSON.stringify(settingsObj));
+      return new Response(JSON.stringify({ ok: true }), { headers });
+    }
+
     // Refuse to store empty — safety net
     if (incoming.length === 0) {
       return new Response(JSON.stringify({ error: "Refusing to store empty data" }), { status: 400, headers });
@@ -45,14 +60,14 @@ export async function onRequest(context) {
 
     // Force mode: skip merge, write directly (used for deletes)
     if (force) {
-      await env.INTERCEDE_KV.put("people", JSON.stringify(incoming));
+      await env.INTERCEDE_KV.put(key, JSON.stringify(incoming));
       return new Response(JSON.stringify({ ok: true, count: incoming.length, forced: true }), { headers });
     }
 
     // Normal mode: merge person-by-person using updatedAt
     let stored = [];
     try {
-      const raw = await env.INTERCEDE_KV.get("people");
+      const raw = await env.INTERCEDE_KV.get(key);
       if (raw) stored = JSON.parse(raw);
       if (!Array.isArray(stored)) stored = [];
     } catch (_e) { stored = []; }
@@ -73,7 +88,7 @@ export async function onRequest(context) {
       if (!incomingIds.has(s.id)) merged.push(s);
     }
 
-    await env.INTERCEDE_KV.put("people", JSON.stringify(merged));
+    await env.INTERCEDE_KV.put(key, JSON.stringify(merged));
     return new Response(JSON.stringify({ ok: true, count: merged.length }), { headers });
   }
 
