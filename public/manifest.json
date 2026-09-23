@@ -1,7 +1,7 @@
 {
   "name": "Let's Pray",
-  "short_name": "Let's Pray",
-  "description": "Prayer list for Calvary Students leaders",
+  "short_name": "LP",
+  "description": "Prayer list and prayer tracking app",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#1a1c1e",
