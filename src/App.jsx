@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { ChevronLeft, ChevronRight, Heart, Plus, Trash2, Upload, X, RefreshCw, BookOpen, RotateCcw, Cake, BarChart2, Bell, Star, Lightbulb } from "lucide-react";
 
 const STORAGE_KEY = "intercede-people-v2";
-const ADMIN_PASSWORD = "Promo1398!";
+const SETTINGS_KEY = "intercede-settings";
 const VAPID_PUBLIC_KEY = "BI4OYduhY_kBu_GJZtEsQAURClmTLOKMFM23GDuZ5EKd6z7dP5NcuCa0bZVv9eShUr9-gCFrhT1WenkRZAa4vJw";
 
 function urlBase64ToUint8Array(base64String) {
@@ -96,6 +96,22 @@ async function apiSaveHistory(history) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(history),
+  });
+}
+
+async function apiLoadSettings() {
+  try {
+    const res = await fetch("/api/data?key=settings");
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (_e) { return null; }
+}
+
+async function apiSaveSettings(settings) {
+  await fetch("/api/data?key=settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
   });
 }
 
@@ -501,7 +517,47 @@ function AllPrayedScreen({ prayedCount, praySessionCount, total, onWeek, onKeepP
   );
 }
 
+function SetupScreen({ onComplete }) {
+  const [name, setName] = React.useState("");
+  const [pw, setPw] = React.useState("");
+  const [pw2, setPw2] = React.useState("");
+  const [err, setErr] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+
+  async function submit() {
+    if (!name.trim()) return setErr("Please enter your ministry name.");
+    if (pw.length < 6) return setErr("Password must be at least 6 characters.");
+    if (pw !== pw2) return setErr("Passwords don't match.");
+    setSaving(true);
+    const data = { name: name.trim(), password: pw };
+    await apiSaveSettings(data).catch(() => {});
+    onComplete(data);
+  }
+
+  const inp = { width:"100%", boxSizing:"border-box", background:"#222527", border:"1px solid #333839", borderRadius:10, color:"#e8e0d4", padding:"12px 14px", fontSize:15, fontFamily:"'Inter', system-ui, sans-serif", outline:"none" };
+  const lbl = { fontSize:11, color:"#7a8082", textTransform:"uppercase", letterSpacing:"0.06em", fontWeight:600, display:"block", marginBottom:5 };
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#1a1c1e", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"32px 24px" }}>
+      <svg width="48" height="48" viewBox="0 0 20 20" style={{ marginBottom:16 }}>
+        <path d="M10,2 L11.768,8.232 L18,10 L11.768,11.768 L10,18 L8.232,11.768 L2,10 L8.232,8.232 Z" fill="#6b9e78" />
+      </svg>
+      <h1 style={{ fontFamily:"'Inter', system-ui, sans-serif", fontSize:28, fontWeight:600, color:"#e8e0d4", margin:"0 0 6px", textAlign:"center" }}>Let's Pray</h1>
+      <p style={{ fontSize:13, color:"#7a8082", margin:"0 0 32px", textAlign:"center" }}>Admin setup — only needs to be done once</p>
+      <div style={{ width:"100%", maxWidth:360, display:"flex", flexDirection:"column", gap:12 }}>
+        <div><label style={lbl}>Ministry Name</label><input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Calvary Students" style={inp} /></div>
+        <div><label style={lbl}>Admin Password</label><input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="Choose a password (6+ characters)" style={inp} /></div>
+        <div><label style={lbl}>Confirm Password</label><input type="password" value={pw2} onChange={e => setPw2(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} placeholder="Re-enter password" style={inp} /></div>
+        {err && <p style={{ color:"#c07070", fontSize:13, margin:0 }}>{err}</p>}
+        <button onClick={submit} disabled={saving} style={{ background:"#6b9e78", border:"none", color:"#fff", borderRadius:12, padding:"14px 0", fontSize:15, fontWeight:600, cursor:"pointer", fontFamily:"'Inter', system-ui, sans-serif", marginTop:4, opacity: saving ? 0.7 : 1 }}>{saving ? "Saving…" : "Get Started"}</button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const [settings, setSettings] = useState(null);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [people, setPeople] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("pray");
@@ -559,6 +615,14 @@ export default function App() {
   const [adminPwInput, setAdminPwInput] = useState("");
   const [adminPwError, setAdminPwError] = useState("");
   const [pendingView, setPendingView] = useState(null);
+
+  useEffect(() => {
+    // Load settings on startup
+    apiLoadSettings().then(s => {
+      setSettings(s || false);
+      setSettingsLoaded(true);
+    });
+  }, []);
 
   useEffect(() => {
     // Check if push notifications are supported
@@ -1190,7 +1254,7 @@ export default function App() {
   }
 
   function submitAdminPw() {
-    if (adminPwInput === ADMIN_PASSWORD) {
+    if (adminPwInput === settings.password) {
       setAdminAuthed(true);
       setAdminAuthedState(true);
       setShowAdminPrompt(false);
@@ -1205,6 +1269,22 @@ export default function App() {
     return <div style={S.root}><p style={{ color: C.cream, fontFamily: "Lora, Georgia, serif", textAlign: "center", marginTop: 80, fontSize: 20 }}>Loading…</p></div>;
   }
 
+  // Show loading screen until settings are loaded
+  if (!settingsLoaded) {
+    return (
+      <div style={{ minHeight:"100vh", background:"#1a1c1e", display:"flex", alignItems:"center", justifyContent:"center" }}>
+        <svg width="36" height="36" viewBox="0 0 20 20" style={{ opacity:0.5 }}>
+          <path d="M10,2 L11.768,8.232 L18,10 L11.768,11.768 L10,18 L8.232,11.768 L2,10 L8.232,8.232 Z" fill="#6b9e78" />
+        </svg>
+      </div>
+    );
+  }
+
+  // Show setup screen if no settings yet
+  if (!settings) {
+    return <SetupScreen onComplete={s => setSettings(s)} />;
+  }
+
   const bdayStatus = current ? getBirthdayStatus(current.birthday) : null;
   const prayedThis = activePeople.filter(p => withinWeek(p.prayedAt)).sort((a, b) => b.prayedAt - a.prayedAt);
   const notPrayedThis = activePeople.filter(p => !withinWeek(p.prayedAt)).sort((a, b) => a.name.localeCompare(b.name));
@@ -1217,7 +1297,7 @@ export default function App() {
           <svg width="16" height="16" viewBox="0 0 20 20" style={{ flexShrink:0, marginTop:2 }}><path d="M10,2 L11.768,8.232 L18,10 L11.768,11.768 L10,18 L8.232,11.768 L2,10 L8.232,8.232 Z" fill="#6b9e78" /></svg>
           <div style={{ display:"flex", flexDirection:"column", lineHeight:1 }}>
             <span style={S.logoText}>Let’s Pray</span>
-            <span style={S.logoSub}>Calvary Students</span>
+            <span style={S.logoSub}>{settings.name}</span>
           </div>
         </div>
         <div style={{ ...S.weekBar, cursor: "pointer" }} onClick={() => setView("week")}>
