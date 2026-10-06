@@ -1,0 +1,15 @@
+name = "letspray-birthday-cron"
+main = "src/index.js"
+compatibility_date = "2024-09-01"
+
+[triggers]
+# 12:00 and 13:00 UTC = 8:00 AM Eastern (daylight / standard time). The site only
+# sends once per day, when it is 8:00 AM or later locally, so the extra run is harmless.
+crons = ["0 12,13 * * *"]
+
+[vars]
+# Your live site, no trailing slash (e.g. https://pray.yourchurch.com)
+SITE_URL = "https://YOUR-SITE.pages.dev"
+
+# Set the secret once with:  npx wrangler secret put CRON_SECRET
+# (use the same value as the CRON_SECRET secret on your Pages project)
