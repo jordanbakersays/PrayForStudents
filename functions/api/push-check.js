@@ -17,16 +17,17 @@ export async function onRequest(context) {
     return new Response(JSON.stringify({ ok: true }), { headers });
   }
 
-  // We don't know which subscription this device has without storing something client-side.
-  // The client sends its subscription endpoint hash so we can mark it as seen.
-  let endpointHash = null;
+  // The client sends its subscription endpoint so we can mark that device as seen.
+  let endpoint = null;
   try {
     const body = await request.json();
-    endpointHash = body.endpointHash;
+    endpoint = body.endpoint;
   } catch (_e) {}
 
-  if (endpointHash) {
-    const key = "push:" + endpointHash;
+  if (endpoint) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(endpoint));
+    const hex = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
+    const key = "push:" + hex.slice(0, 40);
     const raw = await env.INTERCEDE_KV.get(key);
     if (raw) {
       const record = JSON.parse(raw);
