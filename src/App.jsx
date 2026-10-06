@@ -77,11 +77,23 @@ async function apiRegisterPush(subscription, reminderTime) {
   });
 }
 
-async function apiMarkSeen(endpointHash) {
+// Birthday alerts (admin only) — see functions/api/birthday-alerts.js
+async function apiBday(action, payload = {}) {
+  const res = await fetch("/api/birthday-alerts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, ...payload }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Request failed");
+  return data;
+}
+
+async function apiMarkSeen(endpoint) {
   await fetch("/api/push-check", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ endpointHash }),
+    body: JSON.stringify({ endpoint }),
   });
 }
 
@@ -596,6 +608,9 @@ export default function App() {
   const [reminderExpanded, setReminderExpanded] = useState(() => { try { return localStorage.getItem('intercede-reminder-expanded') !== 'false'; } catch { return true; } });
   const [weekHistory, setWeekHistory] = useState([]);
   const [bdayInput, setBdayInput] = useState("");
+  const [bdayAlertOn, setBdayAlertOn] = useState(false);
+  const [bdayAlertBusy, setBdayAlertBusy] = useState(false);
+  const [bdayAlertMsg, setBdayAlertMsg] = useState("");
 
   // Prayer requests
   const [reqFor, setReqFor] = useState(null);
@@ -654,8 +669,13 @@ export default function App() {
       navigator.serviceWorker.register("/sw.js").then(reg => {
         reg.pushManager.getSubscription().then(sub => {
           if (sub) {
-            const hash = btoa(sub.endpoint).slice(0, 40);
-            apiMarkSeen(hash).catch(() => {});
+            // Re-register so devices saved under the old (colliding) key get their own record,
+            // then mark this device as seen today.
+            const savedTime = (() => { try { return localStorage.getItem("intercede-push-time") || "09:00"; } catch (_e) { return "09:00"; } })();
+            apiRegisterPush(sub.toJSON(), savedTime)
+              .catch(() => {})
+              .then(() => apiMarkSeen(sub.endpoint))
+              .catch(() => {});
           }
         });
       }).catch(() => {});
@@ -1219,10 +1239,8 @@ export default function App() {
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
       });
-      const hash = btoa(sub.endpoint).slice(0, 40);
       await apiRegisterPush(sub.toJSON(), pushTime);
       localStorage.setItem("intercede-push-time", pushTime);
-      localStorage.setItem("intercede-push-hash", hash);
       setPushEnabled(true);
       setReminderExpanded(false);
       try { localStorage.setItem('intercede-reminder-expanded', 'false'); } catch (_e) {}
@@ -1252,6 +1270,82 @@ export default function App() {
       setPushEnabled(false);
     } catch (_e) {}
   }
+
+  // ── Birthday alerts (admin) ──────────────────────────────
+  async function getBdaySubscription(createIfMissing) {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub && createIfMissing) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+    }
+    return sub;
+  }
+
+  async function enableBdayAlerts() {
+    setBdayAlertBusy(true);
+    setBdayAlertMsg("");
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        setBdayAlertMsg("Notifications are blocked for this site. Allow them in your browser or phone settings, then try again.");
+        setBdayAlertBusy(false);
+        return;
+      }
+      const sub = await getBdaySubscription(true);
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      await apiBday("register", { subscription: sub.toJSON(), time: "08:00", tz });
+      setBdayAlertOn(true);
+      setBdayAlertMsg("Birthday alerts are on. Tap “Send test” to make sure they reach this device.");
+    } catch (e) {
+      setBdayAlertMsg("Error: " + (e.message || "Could not turn on birthday alerts."));
+    }
+    setBdayAlertBusy(false);
+  }
+
+  async function disableBdayAlerts() {
+    setBdayAlertBusy(true);
+    try {
+      const sub = await getBdaySubscription(false);
+      if (sub) await apiBday("unregister", { endpoint: sub.endpoint });
+      setBdayAlertOn(false);
+      setBdayAlertMsg("");
+    } catch (e) {
+      setBdayAlertMsg("Error: " + (e.message || "Could not turn off birthday alerts."));
+    }
+    setBdayAlertBusy(false);
+  }
+
+  async function sendBdayTest() {
+    setBdayAlertBusy(true);
+    setBdayAlertMsg("");
+    try {
+      const sub = await getBdaySubscription(false);
+      if (!sub) throw new Error("This device isn't subscribed. Turn alerts off and on again.");
+      await apiBday("test", { endpoint: sub.endpoint });
+      setBdayAlertMsg("Test sent — it should show up in a few seconds.");
+    } catch (e) {
+      setBdayAlertMsg("Test failed: " + (e.message || "unknown error"));
+    }
+    setBdayAlertBusy(false);
+  }
+
+  useEffect(() => {
+    if (!adminAuthed || pushSupported !== true) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const sub = await getBdaySubscription(false);
+        if (!sub) return;
+        const st = await apiBday("status", { endpoint: sub.endpoint });
+        if (cancelled) return;
+        if (st.enabled) setBdayAlertOn(true);
+      } catch (_e) {}
+    })();
+    return () => { cancelled = true; };
+  }, [adminAuthed, pushSupported]);
 
   function submitAdminPw() {
     if (adminPwInput === settings.password) {
@@ -1699,6 +1793,41 @@ export default function App() {
       {/* ─── PEOPLE ─── */}
       {view === "people" && (
         <div style={S.peopleWrap}>
+          {/* ── Birthday alerts (admin) ── */}
+          <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding:"14px", display:"flex", flexDirection:"column", gap:10, marginBottom:4 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <Cake size={14} color={bdayAlertOn ? C.accent : C.muted} />
+              <p style={{ margin:0, fontSize:11, color: bdayAlertOn ? C.accent : C.muted, textTransform:"uppercase", letterSpacing:"0.06em", fontWeight:600 }}>
+                Birthday Alerts{bdayAlertOn ? " · On" : ""}
+              </p>
+            </div>
+            {pushSupported === true ? (
+              <>
+                <p style={{ margin:0, fontSize:12, color:C.muted, lineHeight:1.5 }}>
+                  Get a notification on this device at 8:00 AM, on days when someone has a birthday.
+                </p>
+                {bdayAlertOn ? (
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={sendBdayTest} disabled={bdayAlertBusy} style={{ ...S.reminderOnBtn, flex:1 }}>Send test</button>
+                    <button onClick={disableBdayAlerts} disabled={bdayAlertBusy} style={{ ...S.reminderOffBtn, flex:1 }}>Turn off</button>
+                  </div>
+                ) : (
+                  <button onClick={enableBdayAlerts} disabled={bdayAlertBusy} style={S.reminderOnBtn}>
+                    {bdayAlertBusy ? "Setting up…" : "Turn on birthday alerts"}
+                  </button>
+                )}
+                {bdayAlertMsg && <p style={{ margin:0, fontSize:12, color: /^(Error|Test failed|Couldn|Notifications are blocked)/.test(bdayAlertMsg) ? "#c07070" : C.muted, lineHeight:1.5 }}>{bdayAlertMsg}</p>}
+              </>
+            ) : pushSupported === "ios-prompt" ? (
+              <p style={{ margin:0, fontSize:12, color:C.muted, lineHeight:1.5 }}>
+                On iPhone, add this app to your Home Screen first (see “Daily Reminders” on the Pray tab), then open it from there to turn on birthday alerts.
+              </p>
+            ) : (
+              <p style={{ margin:0, fontSize:12, color:C.muted, lineHeight:1.5 }}>
+                This browser doesn't support notifications. Try Chrome on Android, or Safari on iOS 16.4+ from the Home Screen.
+              </p>
+            )}
+          </div>
           {/* ── Add person form ── */}
           <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding:"14px", display:"flex", flexDirection:"column", gap:8, marginBottom:4 }}>
             <p style={{ margin:0, fontSize:11, color:C.muted, textTransform:"uppercase", letterSpacing:"0.06em", fontWeight:600 }}>Add Person</p>
