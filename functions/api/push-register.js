@@ -48,12 +48,27 @@ export async function onRequest(context) {
   const record = { subscription, reminderTime: reminderTime || "09:00", lastSeen };
   await env.INTERCEDE_KV.put(key, JSON.stringify(record));
 
+  // Clean up the legacy record for this same device (old key = first 40 chars of base64(endpoint)).
+  // Left in place, the reminder sender would find the device twice and send duplicate reminders.
+  // Only removed when it holds THIS device's subscription, so other devices are never affected.
+  let legacyKey = null;
+  try {
+    const candidate = "push:" + btoa(subscription.endpoint).slice(0, 40);
+    if (candidate !== key) {
+      const legacyRaw = await env.INTERCEDE_KV.get(candidate);
+      if (legacyRaw && JSON.parse(legacyRaw)?.subscription?.endpoint === subscription.endpoint) {
+        await env.INTERCEDE_KV.delete(candidate);
+        legacyKey = candidate;
+      }
+    }
+  } catch (_e) {}
+
   const indexRaw = await env.INTERCEDE_KV.get("push:index");
-  const index = indexRaw ? JSON.parse(indexRaw) : [];
-  if (!index.includes(key)) {
-    index.push(key);
-    await env.INTERCEDE_KV.put("push:index", JSON.stringify(index));
-  }
+  let index = indexRaw ? JSON.parse(indexRaw) : [];
+  let changed = false;
+  if (legacyKey && index.includes(legacyKey)) { index = index.filter(k => k !== legacyKey); changed = true; }
+  if (!index.includes(key)) { index.push(key); changed = true; }
+  if (changed) await env.INTERCEDE_KV.put("push:index", JSON.stringify(index));
 
   return new Response(JSON.stringify({ ok: true, key, reminderTime }), { headers });
 }
